@@ -71,7 +71,7 @@ export async function storeTempSession(
     access_token: data.accessToken,
     refresh_token: data.refreshToken,
     factor_id: data.factorId,
-    expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
   });
   if (error) throw new Error(`Failed to store temp session: ${error.message}`);
 }
