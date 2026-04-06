@@ -92,6 +92,62 @@ export async function consumeTempSession(
   return data;
 }
 
+export async function storeSession(
+  adminClient: SupabaseClient,
+  refreshToken: string,
+  userAgent: string
+): Promise<void> {
+  const isDesktop = /node/i.test(userAgent);
+  // Desktop: no expiry (set far future). Non-desktop: 48 hours.
+  const expiresAt = isDesktop
+    ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()
+    : new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+
+  const { error } = await adminClient.from("mcp_gateway_oauth_state").insert({
+    kind: "session",
+    refresh_token: refreshToken,
+    access_token: userAgent,
+    expires_at: expiresAt,
+  });
+  if (error) throw new Error(`Failed to store session: ${error.message}`);
+}
+
+export async function checkAndUpdateSession(
+  adminClient: SupabaseClient,
+  oldRefreshToken: string,
+  newRefreshToken: string
+): Promise<{ valid: boolean }> {
+  // Look up session by refresh token
+  const { data, error } = await adminClient
+    .from("mcp_gateway_oauth_state")
+    .select("id, expires_at")
+    .eq("kind", "session")
+    .eq("refresh_token", oldRefreshToken)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to check session: ${error.message}`);
+
+  // No session row = legacy token issued before this feature, allow it
+  if (!data) return { valid: true };
+
+  // Check if session has expired (48h for non-desktop)
+  if (new Date(data.expires_at) < new Date()) {
+    await adminClient
+      .from("mcp_gateway_oauth_state")
+      .delete()
+      .eq("id", data.id);
+    return { valid: false };
+  }
+
+  // Update refresh token for next cycle
+  await adminClient
+    .from("mcp_gateway_oauth_state")
+    .update({ refresh_token: newRefreshToken })
+    .eq("id", data.id);
+
+  return { valid: true };
+}
+
 export async function cleanupExpired(adminClient: SupabaseClient): Promise<void> {
   await adminClient
     .from("mcp_gateway_oauth_state")

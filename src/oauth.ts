@@ -2,7 +2,7 @@ import express from "express";
 import { randomUUID, createHash } from "crypto";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { loginPage, mfaPage } from "./templates.js";
-import { storeAuthCode, consumeAuthCode, storeTempSession, consumeTempSession } from "./state.js";
+import { storeAuthCode, consumeAuthCode, storeTempSession, consumeTempSession, storeSession, checkAndUpdateSession } from "./state.js";
 
 export function createOAuthRouter(
   supabaseUrl: string,
@@ -268,6 +268,10 @@ export function createOAuthRouter(
         return;
       }
 
+      // Track session for 48h re-auth enforcement on non-desktop clients
+      const userAgent = req.headers["user-agent"] ?? "";
+      await storeSession(adminClient, entry.refresh_token, userAgent);
+
       res.json({
         access_token: entry.access_token,
         token_type: "Bearer",
@@ -289,6 +293,13 @@ export function createOAuthRouter(
         const { data, error } = await refreshClient.auth.refreshSession({ refresh_token });
         if (error || !data.session) {
           res.status(400).json({ error: "invalid_grant", error_description: error?.message ?? "Refresh failed" });
+          return;
+        }
+
+        // Enforce 48h re-auth for non-desktop clients
+        const sessionCheck = await checkAndUpdateSession(adminClient, refresh_token, data.session.refresh_token);
+        if (!sessionCheck.valid) {
+          res.status(400).json({ error: "invalid_grant", error_description: "Session expired. Please re-authenticate." });
           return;
         }
 
